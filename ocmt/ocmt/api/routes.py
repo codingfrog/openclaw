@@ -56,11 +56,11 @@ async def _require_admin_key(
 
 
 class ChatRequest(BaseModel):
-    message: str
-    user_id: str = ""
-    agent_id: str = "main"
-    channel: str = "api"
-    model: str | None = None
+    message: str = Field(min_length=1, max_length=100_000)
+    user_id: str = Field(default="", max_length=256)
+    agent_id: str = Field(default="main", max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    channel: str = Field(default="api", max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    model: str | None = Field(default=None, max_length=64)
 
 
 class ChatResponse(BaseModel):
@@ -71,20 +71,20 @@ class ChatResponse(BaseModel):
 
 
 class MemorySearchRequest(BaseModel):
-    query: str
-    max_results: int = 6
+    query: str = Field(min_length=1, max_length=10_000)
+    max_results: int = Field(default=6, ge=1, le=50)
 
 
 class MemoryWriteRequest(BaseModel):
-    content: str
+    content: str = Field(min_length=1, max_length=500_000)
     date: str | None = None  # YYYY-MM-DD, defaults to today
 
 
 class TenantCreateRequest(BaseModel):
-    name: str
-    slug: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    name: str = Field(min_length=1, max_length=256)
+    slug: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$")
     # Optional per-tenant Anthropic API key override.
-    anthropic_api_key: str = ""
+    anthropic_api_key: str = Field(default="", max_length=256)
 
 
 class TenantCreateResponse(BaseModel):
@@ -161,7 +161,12 @@ async def memory_write(
         date = datetime.date.fromisoformat(req.date)
 
     path = append_daily_log(workspace, req.content, date)
-    return {"path": str(path), "status": "appended"}
+    # Return relative path only — never expose absolute filesystem paths.
+    try:
+        rel = path.relative_to(workspace.root)
+    except ValueError:
+        rel = path.name
+    return {"path": str(rel), "status": "appended"}
 
 
 @router.get("/memory/daily/{date}")

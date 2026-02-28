@@ -69,9 +69,11 @@ async def _execute_cli(
     """Spawn the CLI subprocess and parse output."""
     args = _build_args(request, cfg)
 
-    # Inject API key into subprocess env if provided, otherwise
-    # the CLI uses its own auth (OAuth session or env-level key).
-    env = dict(os.environ)
+    # Build a filtered env for the subprocess. Start from the full
+    # parent env (needed for PATH, HOME, etc.) but scrub secrets that
+    # belong to the server, not the CLI subprocess.
+    _SCRUB_KEYS = {"OCMT_ADMIN_KEY", "OCMT_ENCRYPTION_KEY"}
+    env = {k: v for k, v in os.environ.items() if k not in _SCRUB_KEYS}
     if api_key:
         env["ANTHROPIC_API_KEY"] = api_key
 
@@ -103,8 +105,11 @@ async def _execute_cli(
 
     if proc.returncode != 0:
         err_text = stderr.decode(errors="replace").strip()
+        # Log full error server-side; only expose a safe summary to callers
+        # to prevent leaking filesystem paths, API keys, or env vars.
+        logger.error("CLI stderr (code %d): %s", proc.returncode, err_text)
         raise RuntimeError(
-            f"Claude CLI exited with code {proc.returncode}: {err_text}"
+            f"Claude CLI exited with code {proc.returncode}"
         )
 
     raw = stdout.decode(errors="replace").strip()
@@ -273,7 +278,8 @@ async def run_cli_streaming(
     async with lock:
         args = _build_args(request, cfg)
 
-        env = dict(os.environ)
+        _SCRUB_KEYS_S = {"OCMT_ADMIN_KEY", "OCMT_ENCRYPTION_KEY"}
+        env = {k: v for k, v in os.environ.items() if k not in _SCRUB_KEYS_S}
         if resolved_key:
             env["ANTHROPIC_API_KEY"] = resolved_key
 

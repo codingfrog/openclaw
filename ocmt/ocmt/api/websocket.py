@@ -51,10 +51,13 @@ async def chat_websocket(websocket: WebSocket):
             if not message:
                 await websocket.send_json({"type": "error", "detail": "Empty message"})
                 continue
+            if len(message) > 100_000:
+                await websocket.send_json({"type": "error", "detail": "Message too long"})
+                continue
 
-            user_id = msg.get("user_id", "")
-            agent_id = msg.get("agent_id", "main")
-            channel = msg.get("channel", "ws")
+            user_id = str(msg.get("user_id", ""))[:256]
+            agent_id = str(msg.get("agent_id", "main"))[:64]
+            channel = str(msg.get("channel", "ws"))[:64]
 
             try:
                 result = await _agent_runner.run(
@@ -72,11 +75,13 @@ async def chat_websocket(websocket: WebSocket):
                     "model": result.model,
                 })
 
-            except Exception as exc:
+            except Exception:
                 logger.exception("WebSocket agent run failed")
+                # Never expose raw exception text — may contain paths,
+                # API keys, or internal state.
                 await websocket.send_json({
                     "type": "error",
-                    "detail": str(exc),
+                    "detail": "Internal error processing request",
                 })
 
     except WebSocketDisconnect:
