@@ -6,13 +6,17 @@ agent-runner-execution.ts flow:
 
     Inbound message
       -> Resolve tenant (from API key)
-      -> Resolve session (from tenant + channel + user)
+      -> Resolve session (from tenant + agent + user; channel-independent)
       -> Load memory context (today + yesterday + MEMORY.md)
       -> Check if memory flush needed
       -> Build system prompt with context
       -> Execute via CLI runner (with model fallback)
       -> Parse response, update session state
       -> Return result
+
+Session routing is tenant-level: the same user shares one session
+across all channels (CLI, API, WS, Telegram, etc.). Channel is
+recorded in transcript entries for audit but does not affect routing.
 """
 
 from __future__ import annotations
@@ -88,8 +92,8 @@ class AgentRunner:
         workspace = self.tenants.resolve_workspace(tenant_id)
         tenant = self.tenants.get_tenant(tenant_id)
 
-        # 1. Resolve or create session
-        session_key = build_session_key(agent_id, channel, user_id)
+        # 1. Resolve or create session (channel-independent)
+        session_key = build_session_key(agent_id, user_id)
         session = self.sessions.get_or_create(
             tenant_id=tenant_id,
             session_key=session_key,
@@ -153,9 +157,9 @@ class AgentRunner:
             ),
         )
 
-        # 7. Record transcript
-        SessionStore.append_transcript(workspace, session_key, "user", prompt)
-        SessionStore.append_transcript(workspace, session_key, "assistant", response.text)
+        # 7. Record transcript (channel included as metadata for audit)
+        SessionStore.append_transcript(workspace, session_key, "user", prompt, channel=channel)
+        SessionStore.append_transcript(workspace, session_key, "assistant", response.text, channel=channel)
 
         # 8. Update session state
         total_tokens = (response.usage.total if response.usage else 0) + session.total_tokens

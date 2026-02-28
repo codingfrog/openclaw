@@ -137,16 +137,23 @@ class SessionStore:
         session_key: str,
         role: str,
         content: str,
+        channel: str | None = None,
     ) -> None:
-        """Append a message turn to the session transcript."""
+        """Append a message turn to the session transcript.
+
+        Channel is recorded as metadata for audit trail, but does not
+        affect session routing (sessions are channel-independent).
+        """
         path = SessionStore.transcript_path(workspace, session_key)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        entry = {
+        entry: dict = {
             "role": role,
             "content": content,
             "timestamp": time.time(),
         }
+        if channel:
+            entry["channel"] = channel
 
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")

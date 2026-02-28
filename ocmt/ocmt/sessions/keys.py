@@ -1,10 +1,11 @@
 """Session key derivation and parsing.
 
-Ported from OpenClaw's src/routing/session-key.ts.
-Session keys encode the agent, channel, and user context
-for routing and isolation.
+Session keys encode the agent and user context for routing.
+Channel is NOT part of the key — isolation is at the tenant level,
+so the same user shares one session across all channels (CLI, API,
+WebSocket, Telegram, etc.).
 
-Format: agent:{agentId}:{channel}:user-{userId}
+Format: agent:{agentId}:user-{userId}
 """
 
 from __future__ import annotations
@@ -17,58 +18,44 @@ class ParsedSessionKey:
     """Parsed components of a session key."""
 
     agent_id: str
-    channel: str
-    rest: str
+    user_id: str
 
 
 def build_session_key(
     agent_id: str = "main",
-    channel: str = "api",
     user_id: str = "",
 ) -> str:
-    """Build a session key from components.
+    """Build a session key from agent and user.
 
-    The tenant_id is NOT embedded in the session key — tenant isolation
-    is at the auth layer. Session keys are scoped within a tenant.
+    Channel is intentionally excluded — a user has one session per
+    tenant+agent regardless of which channel they use. This ensures
+    memory and conversation context are shared across CLI, API, WS,
+    and chat-platform channels.
+
+    Tenant isolation is handled at the auth layer; the tenant_id is
+    NOT embedded in the session key.
     """
-    parts = [f"agent:{agent_id}", channel]
+    parts = [f"agent:{agent_id}"]
     if user_id:
         parts.append(f"user-{user_id}")
     return ":".join(parts)
 
 
 def parse_session_key(session_key: str) -> ParsedSessionKey | None:
-    """Parse a session key into components.
-
-    Mirrors OpenClaw's parseAgentSessionKey from session-key.ts.
-    """
+    """Parse a session key into components."""
     raw = session_key.strip().lower()
     if not raw:
         return None
 
     parts = [p for p in raw.split(":") if p]
-    if len(parts) < 3 or parts[0] != "agent":
+    if len(parts) < 2 or parts[0] != "agent":
         return None
 
     agent_id = parts[1]
-    channel = parts[2]
-    rest = ":".join(parts[2:])
+    user_id = ""
+    for part in parts[2:]:
+        if part.startswith("user-"):
+            user_id = part.removeprefix("user-")
+            break
 
-    return ParsedSessionKey(agent_id=agent_id, channel=channel, rest=rest)
-
-
-def derive_chat_type(session_key: str) -> str:
-    """Determine if a session is direct, group, or channel.
-
-    Mirrors OpenClaw's deriveChatTypeFromSessionKey.
-    """
-    parsed = parse_session_key(session_key)
-    if not parsed:
-        return "unknown"
-
-    tokens = set(parsed.rest.lower().split(":"))
-    if "group" in tokens:
-        return "group"
-    if "channel" in tokens:
-        return "channel"
-    return "direct"
+    return ParsedSessionKey(agent_id=agent_id, user_id=user_id)

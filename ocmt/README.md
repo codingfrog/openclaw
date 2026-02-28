@@ -92,43 +92,61 @@ Connect to `ws://localhost:8000/ws/chat` and send JSON frames:
 Response:
 
 ```json
-{"type": "response", "text": "...", "session_key": "agent:main:ws:user-", "model": "sonnet"}
+{"type": "response", "text": "...", "session_key": "agent:main:user-", "model": "sonnet"}
 ```
 
 ## How conversations work
 
+### Tenant-level isolation
+
+Isolation is at the **tenant** level. Each tenant gets its own:
+- Memory files (`MEMORY.md`, `memory/*.md`)
+- Conversation sessions and transcripts
+- FTS5 search index
+- API key
+
+All channels (CLI, REST API, WebSocket, Telegram, etc.) share the same
+memory and session state within a tenant. A user who starts a conversation
+via CLI can continue it via the API — context carries over seamlessly.
+
 ### Session routing
 
-Every conversation is identified by a **session key** built from three
+Every conversation is identified by a **session key** built from two
 components:
 
 ```
-agent:{agentId}:{channel}:user-{userId}
+agent:{agentId}:user-{userId}
 ```
 
 - **agent** — which agent personality to use (default: `main`)
-- **channel** — where the message came from (`cli`, `api`, `ws`, `telegram`, etc.)
 - **user** — who is talking
 
-The same tenant + channel + user always lands in the same session, so
-context carries over between messages. Different channels get separate
-sessions (your CLI conversation is independent from your API conversation).
+Channel is **not** part of the session key. The same user always lands
+in the same session regardless of which channel they use. Channel is
+recorded in transcript entries as metadata for audit purposes.
 
 ### Multi-user conversations
 
 Multiple users can talk to the same tenant, each with their own session:
 
 ```bash
-# User A's conversation
+# User A's conversation (via CLI)
 ocmt chat "I'm working on the frontend" --tenant alice --user user-a
 
 # User B's conversation (separate session, separate context)
 ocmt chat "I'm working on the backend" --tenant alice --user user-b
 
-# User A continues (picks up where they left off)
-ocmt chat "What am I working on?" --tenant alice --user user-a
+# User A continues via a different channel (picks up the same session)
+curl -X POST http://localhost:8000/api/v1/chat \
+  -H "Authorization: Bearer ocmt_Abc123..." \
+  -H "Content-Type: application/json" \
+  -d '{"message": "What am I working on?", "user_id": "user-a"}'
 # -> "You mentioned you're working on the frontend."
 ```
+
+The cross-channel continuity works because the session key is
+`agent:main:user-user-a` regardless of whether the message came from
+CLI, API, or WebSocket.
 
 Via the API, set `user_id` in the request body:
 
@@ -281,7 +299,7 @@ data/tenants/
         2026-02-27.md          # Yesterday's log
       MEMORY.md                # Long-term memory
     sessions/
-      agent:main:cli:user-cli-user.jsonl   # Transcript
+      agent_main_user_cli_user.jsonl       # Transcript (shared across channels)
     memory.sqlite              # Per-tenant FTS5 index
   beta/
     workspace/
@@ -293,8 +311,9 @@ metadata. Per-tenant SQLite databases store the full-text search index.
 
 ## API reference
 
-All endpoints require `Authorization: Bearer <api_key>` except tenant
-admin endpoints.
+All endpoints require `Authorization: Bearer <api_key>`. Tenant admin
+endpoints (`POST /api/v1/tenants`, `GET /api/v1/tenants`) also require
+an `X-Admin-Key` header (set via `OCMT_ADMIN_KEY` env var).
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -304,8 +323,8 @@ admin endpoints.
 | GET | `/api/v1/memory/daily/{date}` | Read a daily log |
 | GET | `/api/v1/sessions` | List tenant sessions |
 | DELETE | `/api/v1/sessions/{key}` | Delete a session |
-| POST | `/api/v1/tenants` | Create a tenant (admin) |
-| GET | `/api/v1/tenants` | List all tenants (admin) |
+| POST | `/api/v1/tenants` | Create a tenant (admin, X-Admin-Key) |
+| GET | `/api/v1/tenants` | List all tenants (admin, X-Admin-Key) |
 | WS | `/ws/chat` | WebSocket chat |
 
 ### POST /api/v1/chat
@@ -320,14 +339,15 @@ admin endpoints.
 }
 ```
 
-Only `message` is required. All other fields have defaults.
+Only `message` is required. All other fields have defaults. `channel` is
+recorded in the transcript for audit but does not affect session routing.
 
 Response:
 
 ```json
 {
   "text": "Hello! How can I help?",
-  "session_key": "agent:main:api:user-user-123",
+  "session_key": "agent:main:user-user-123",
   "model": "sonnet",
   "usage": {"input_tokens": 150, "output_tokens": 30, "total": 180}
 }
@@ -361,11 +381,11 @@ The agent orchestrator (`agents/runner.py`) is the central piece. Each
 call to `AgentRunner.run()` executes a full turn:
 
 1. Resolve tenant workspace from API key
-2. Get or create session (keyed by tenant + channel + user)
+2. Get or create session (keyed by tenant + agent + user; channel-independent)
 3. Check if session needs compaction (token limit approaching)
 4. Run memory flush if needed (save important context before compaction)
 5. Load bootstrap memory (today + yesterday + MEMORY.md)
 6. Build system prompt with memory context
 7. Execute via Claude Code CLI subprocess (with model fallback)
-8. Record transcript to JSONL
+8. Record transcript to JSONL (with channel metadata)
 9. Update session state (tokens, CLI session ID)
