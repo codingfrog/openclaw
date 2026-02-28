@@ -127,6 +127,7 @@ async function installPluginFromPackageDir(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
   expectedPluginId?: string;
+  allowUnsafe?: boolean;
 }): Promise<InstallPluginResult> {
   const { logger, timeoutMs, mode, dryRun } = resolveTimedInstallModeOptions(params, defaultLogger);
 
@@ -196,7 +197,8 @@ async function installPluginFromPackageDir(params: {
     forcedScanEntries.push(resolvedEntry);
   }
 
-  // Scan plugin source for dangerous code patterns (warn-only; never blocks install)
+  // Scan plugin source for dangerous code patterns.
+  // Critical findings block install unless explicitly overridden via allowUnsafe.
   try {
     const scanSummary = await skillScanner.scanDirectoryWithSummary(params.packageDir, {
       includeFiles: forcedScanEntries,
@@ -206,8 +208,18 @@ async function installPluginFromPackageDir(params: {
         .filter((f) => f.severity === "critical")
         .map((f) => `${f.message} (${f.file}:${f.line})`)
         .join("; ");
+      if (!params.allowUnsafe) {
+        const lines = [
+          `Plugin "${pluginId}" blocked: ${scanSummary.critical} critical security finding(s) detected.`,
+          ...scanSummary.findings
+            .filter((f) => f.severity === "critical")
+            .map((f) => `  - ${f.message} (${f.file}:${f.line})`),
+          `To install anyway, re-run with --force.`,
+        ];
+        return { ok: false, error: lines.join("\n") };
+      }
       logger.warn?.(
-        `WARNING: Plugin "${pluginId}" contains dangerous code patterns: ${criticalDetails}`,
+        `WARNING: Plugin "${pluginId}" contains dangerous code patterns (--force used, continuing): ${criticalDetails}`,
       );
     } else if (scanSummary.warn > 0) {
       logger.warn?.(
@@ -299,6 +311,7 @@ export async function installPluginFromArchive(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
   expectedPluginId?: string;
+  allowUnsafe?: boolean;
 }): Promise<InstallPluginResult> {
   const logger = params.logger ?? defaultLogger;
   const timeoutMs = params.timeoutMs ?? 120_000;
@@ -323,6 +336,7 @@ export async function installPluginFromArchive(params: {
         mode,
         dryRun: params.dryRun,
         expectedPluginId: params.expectedPluginId,
+        allowUnsafe: params.allowUnsafe,
       }),
   });
 }
@@ -335,6 +349,7 @@ export async function installPluginFromDir(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
   expectedPluginId?: string;
+  allowUnsafe?: boolean;
 }): Promise<InstallPluginResult> {
   const dirPath = resolveUserPath(params.dirPath);
   if (!(await fileExists(dirPath))) {
@@ -353,6 +368,7 @@ export async function installPluginFromDir(params: {
     mode: params.mode,
     dryRun: params.dryRun,
     expectedPluginId: params.expectedPluginId,
+    allowUnsafe: params.allowUnsafe,
   });
 }
 
@@ -407,6 +423,7 @@ export async function installPluginFromNpmSpec(params: {
   expectedPluginId?: string;
   expectedIntegrity?: string;
   onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
+  allowUnsafe?: boolean;
 }): Promise<InstallPluginResult> {
   const { logger, timeoutMs, mode, dryRun } = resolveTimedInstallModeOptions(params, defaultLogger);
   const expectedPluginId = params.expectedPluginId;
@@ -434,6 +451,7 @@ export async function installPluginFromNpmSpec(params: {
       mode,
       dryRun,
       expectedPluginId,
+      allowUnsafe: params.allowUnsafe,
     },
   });
   return finalizeNpmSpecArchiveInstall(flowResult);
@@ -447,6 +465,7 @@ export async function installPluginFromPath(params: {
   mode?: "install" | "update";
   dryRun?: boolean;
   expectedPluginId?: string;
+  allowUnsafe?: boolean;
 }): Promise<InstallPluginResult> {
   const pathResult = await resolveExistingInstallPath(params.path);
   if (!pathResult.ok) {
@@ -463,6 +482,7 @@ export async function installPluginFromPath(params: {
       mode: params.mode,
       dryRun: params.dryRun,
       expectedPluginId: params.expectedPluginId,
+      allowUnsafe: params.allowUnsafe,
     });
   }
 
@@ -476,6 +496,7 @@ export async function installPluginFromPath(params: {
       mode: params.mode,
       dryRun: params.dryRun,
       expectedPluginId: params.expectedPluginId,
+      allowUnsafe: params.allowUnsafe,
     });
   }
 

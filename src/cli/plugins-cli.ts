@@ -519,7 +519,12 @@ export function registerPluginsCli(program: Command) {
     .argument("<path-or-spec>", "Path (.ts/.js/.zip/.tgz/.tar.gz) or an npm package spec")
     .option("-l, --link", "Link a local path instead of copying", false)
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
-    .action(async (raw: string, opts: { link?: boolean; pin?: boolean }) => {
+    .option(
+      "--force",
+      "Allow installation even when critical security findings are detected",
+      false,
+    )
+    .action(async (raw: string, opts: { link?: boolean; pin?: boolean; force?: boolean }) => {
       const fileSpec = resolveFileNpmSpecToLocalPath(raw);
       if (fileSpec && !fileSpec.ok) {
         defaultRuntime.error(fileSpec.error);
@@ -571,6 +576,7 @@ export function registerPluginsCli(program: Command) {
         const result = await installPluginFromPath({
           path: resolved,
           logger: createPluginInstallLogger(),
+          allowUnsafe: opts.force,
         });
         if (!result.ok) {
           defaultRuntime.error(result.error);
@@ -623,6 +629,7 @@ export function registerPluginsCli(program: Command) {
       const result = await installPluginFromNpmSpec({
         spec: raw,
         logger: createPluginInstallLogger(),
+        allowUnsafe: opts.force,
       });
       if (!result.ok) {
         const bundledFallback = isPackageNotFoundInstallError(result.error)
