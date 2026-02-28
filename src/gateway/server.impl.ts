@@ -64,6 +64,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { createHttpRequestRateLimiter } from "./http-request-rate-limit.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
@@ -432,6 +433,19 @@ export async function startGatewayServer(
   const { rateLimiter: authRateLimiter, browserRateLimiter: browserAuthRateLimiter } =
     createGatewayAuthRateLimiters(rateLimitConfig);
 
+  // Create optional HTTP request rate limiter (OC-SEC-028).
+  // Disabled by default; enabled when gateway.http.rateLimit.maxRequests is set.
+  const httpRateLimitConfig = cfgAtStart.gateway?.http?.rateLimit;
+  const httpRequestRateLimiter =
+    httpRateLimitConfig?.maxRequests && httpRateLimitConfig.maxRequests > 0
+      ? createHttpRequestRateLimiter({
+          maxRequests: httpRateLimitConfig.maxRequests,
+          windowMs: httpRateLimitConfig.windowMs,
+          exemptLoopback: httpRateLimitConfig.exemptLoopback,
+          pruneIntervalMs: 0, // Tied to gateway lifetime; skip background timer.
+        })
+      : undefined;
+
   let controlUiRootState: ControlUiRootState | undefined;
   if (controlUiRootOverride) {
     const resolvedOverride = resolveControlUiRootOverrideSync(controlUiRootOverride);
@@ -504,6 +518,7 @@ export async function startGatewayServer(
     strictTransportSecurityHeader,
     resolvedAuth,
     rateLimiter: authRateLimiter,
+    httpRequestRateLimiter,
     gatewayTls,
     hooksConfig: () => hooksConfig,
     pluginRegistry,
@@ -926,6 +941,7 @@ export async function startGatewayServer(
       }
       skillsChangeUnsub();
       authRateLimiter?.dispose();
+      httpRequestRateLimiter?.dispose();
       browserAuthRateLimiter.dispose();
       channelHealthMonitor?.stop();
       clearSecretsRuntimeSnapshot();

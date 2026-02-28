@@ -289,9 +289,20 @@ export type GatewayHttpSecurityHeadersConfig = {
   strictTransportSecurity?: string | false;
 };
 
+export type GatewayHttpRateLimitConfig = {
+  /** Maximum requests per client within the window. @default 60 */
+  maxRequests?: number;
+  /** Sliding window duration in milliseconds. @default 60000 (1 min) */
+  windowMs?: number;
+  /** Exempt localhost/loopback addresses from HTTP rate limiting. @default true */
+  exemptLoopback?: boolean;
+};
+
 export type GatewayHttpConfig = {
   endpoints?: GatewayHttpEndpointsConfig;
   securityHeaders?: GatewayHttpSecurityHeadersConfig;
+  /** Optional per-client rate limiting for authenticated API endpoints. Disabled by default. */
+  rateLimit?: GatewayHttpRateLimitConfig;
 };
 
 export type GatewayNodesConfig = {

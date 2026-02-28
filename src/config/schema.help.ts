@@ -123,6 +123,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional HTTP response security headers applied by the gateway process itself. Prefer setting these at your reverse proxy when TLS terminates there.",
   "gateway.http.securityHeaders.strictTransportSecurity":
     "Value for the Strict-Transport-Security response header. Set only on HTTPS origins that you fully control; use false to explicitly disable.",
+  "gateway.http.rateLimit":
+    "Optional per-client rate limiting for authenticated HTTP API endpoints (/v1/chat/completions, /v1/responses, /tools/invoke). Disabled by default; enable by setting maxRequests to a positive integer.",
+  "gateway.http.rateLimit.maxRequests":
+    "Maximum number of requests a single client can make within the sliding window. Default: 60. Set to enable rate limiting.",
+  "gateway.http.rateLimit.windowMs":
+    "Sliding window duration in milliseconds for HTTP rate limiting. Default: 60000 (1 minute).",
+  "gateway.http.rateLimit.exemptLoopback":
+    "Whether loopback/localhost addresses are exempt from HTTP rate limiting. Default: true.",
   "gateway.remote.url": "Remote Gateway WebSocket URL (ws:// or wss://).",
   "gateway.remote.token":
     "Bearer token used to authenticate this client to a remote gateway in token-auth deployments. Store via secret/env substitution and rotate alongside remote gateway auth changes.",
