@@ -56,6 +56,7 @@ import {
   resolveHookDeliver,
 } from "./hooks.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
+import { enforceHttpRateLimit, type HttpRequestRateLimiter } from "./http-request-rate-limit.js";
 import { getBearerToken } from "./http-utils.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
@@ -63,6 +64,7 @@ import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "./protocol/cli
 import { isProtectedPluginRoutePath } from "./security-path.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
+import type { WsConnectionLimiter } from "./ws-connection-limit.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -78,6 +80,13 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.statusCode = status;
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.end(JSON.stringify(body));
+}
+
+/** Paths subject to the optional HTTP request rate limiter. */
+const RATE_LIMITED_API_PATHS = new Set(["/v1/chat/completions", "/v1/responses", "/tools/invoke"]);
+
+function isRateLimitedApiPath(pathname: string): boolean {
+  return RATE_LIMITED_API_PATHS.has(pathname);
 }
 
 function isCanvasPath(pathname: string): boolean {
@@ -463,6 +472,8 @@ export function createGatewayHttpServer(opts: {
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  /** Optional per-client HTTP request rate limiter for API endpoints (OC-SEC-028). */
+  httpRequestRateLimiter?: HttpRequestRateLimiter;
   tlsOptions?: TlsOptions;
 }): HttpServer {
   const {
@@ -479,6 +490,7 @@ export function createGatewayHttpServer(opts: {
     handlePluginRequest,
     resolvedAuth,
     rateLimiter,
+    httpRequestRateLimiter,
   } = opts;
   const httpServer: HttpServer = opts.tlsOptions
     ? createHttpsServer(opts.tlsOptions, (req, res) => {
@@ -514,6 +526,23 @@ export function createGatewayHttpServer(opts: {
       if (await handleHooksRequest(req, res)) {
         return;
       }
+
+      // Per-client HTTP request rate limiting for API endpoints (OC-SEC-028).
+      // Applied before auth so that a flood of even-valid requests is throttled.
+      if (httpRequestRateLimiter && isRateLimitedApiPath(requestPath)) {
+        if (
+          enforceHttpRateLimit({
+            req,
+            res,
+            limiter: httpRequestRateLimiter,
+            trustedProxies,
+            allowRealIpFallback,
+          })
+        ) {
+          return;
+        }
+      }
+
       if (
         await handleToolsInvokeHttpRequest(req, res, {
           auth: resolvedAuth,
@@ -637,10 +666,38 @@ export function attachGatewayUpgradeHandler(opts: {
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  /** Optional connection count limiter (OC-SEC-025, OC-SEC-026). */
+  connectionLimiter?: WsConnectionLimiter;
 }) {
-  const { httpServer, wss, canvasHost, clients, resolvedAuth, rateLimiter } = opts;
+  const { httpServer, wss, canvasHost, clients, resolvedAuth, rateLimiter, connectionLimiter } =
+    opts;
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
+      // Enforce WebSocket connection limits before any further processing.
+      const remoteIp = req.socket?.remoteAddress;
+      if (connectionLimiter) {
+        const limitResult = connectionLimiter.acquire(remoteIp);
+        if (!limitResult.allowed) {
+          const reason =
+            limitResult.reason === "global-limit"
+              ? "Too many WebSocket connections"
+              : "Too many WebSocket connections from this IP";
+          socket.write(
+            "HTTP/1.1 503 Service Unavailable\r\n" +
+              "Content-Type: text/plain; charset=utf-8\r\n" +
+              "Connection: close\r\n" +
+              "\r\n" +
+              reason,
+          );
+          socket.destroy();
+          return;
+        }
+        // Release the slot when the underlying TCP socket closes.
+        socket.once("close", () => {
+          connectionLimiter.release(remoteIp);
+        });
+      }
+
       const scopedCanvas = normalizeCanvasScopedUrl(req.url ?? "/");
       if (scopedCanvas.malformedScopedPath) {
         writeUpgradeAuthFailure(socket, { ok: false, reason: "unauthorized" });

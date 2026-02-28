@@ -30,6 +30,7 @@ import { listenGatewayHttpServer } from "./server/http-listen.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { createWsConnectionLimiter } from "./ws-connection-limit.js";
 
 export async function createGatewayRuntimeState(params: {
   cfg: import("../config/config.js").OpenClawConfig;
@@ -168,6 +169,11 @@ export async function createGatewayRuntimeState(params: {
     noServer: true,
     maxPayload: MAX_PAYLOAD_BYTES,
   });
+  const wsConfig = params.cfg.gateway?.ws;
+  const connectionLimiter = createWsConnectionLimiter({
+    maxConnections: wsConfig?.maxConnections,
+    maxConnectionsPerIp: wsConfig?.maxConnectionsPerIp,
+  });
   for (const server of httpServers) {
     attachGatewayUpgradeHandler({
       httpServer: server,
@@ -176,6 +182,7 @@ export async function createGatewayRuntimeState(params: {
       clients,
       resolvedAuth: params.resolvedAuth,
       rateLimiter: params.rateLimiter,
+      connectionLimiter,
     });
   }
 

@@ -315,6 +315,13 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+export type GatewayWsConfig = {
+  /** Maximum total active WebSocket connections. @default 200 */
+  maxConnections?: number;
+  /** Maximum active WebSocket connections from a single IP address. @default 50 */
+  maxConnectionsPerIp?: number;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -356,6 +363,8 @@ export type GatewayConfig = {
   allowRealIpFallback?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
+  /** WebSocket connection limits (OC-SEC-025, OC-SEC-026). */
+  ws?: GatewayWsConfig;
   /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.
