@@ -1,0 +1,30 @@
+# OCMT global configuration
+
+database:
+  path: "ocmt.sqlite"
+
+tenant_workspace_root: "data/tenants"
+
+agents:
+  default_model: "sonnet"
+  fallback_models:
+    - "haiku"
+  cli:
+    command: "claude"
+    timeout_ms: 120000
+    no_output_timeout_ms: 60000
+    serialize: true
+
+memory:
+  chunk_tokens: 400
+  chunk_overlap: 80
+  max_results: 6
+  min_score: 0.35
+  vector_weight: 0.7
+  text_weight: 0.3
+  temporal_decay_enabled: false
+  temporal_decay_half_life_days: 30
+
+api:
+  host: "0.0.0.0"
+  port: 8000

@@ -1,0 +1,1 @@
+"""Chat platform channel adapters."""
