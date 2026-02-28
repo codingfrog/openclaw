@@ -24,7 +24,8 @@ def _ensure_global_schema(db: sqlite3.Connection) -> None:
             slug TEXT UNIQUE NOT NULL,
             api_key_hash TEXT NOT NULL,
             created_at REAL NOT NULL,
-            config_json TEXT DEFAULT '{}'
+            config_json TEXT DEFAULT '{}',
+            anthropic_api_key TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS sessions (
@@ -57,10 +58,17 @@ class TenantManager:
         self.db.row_factory = sqlite3.Row
         _ensure_global_schema(self.db)
 
-    def create_tenant(self, name: str, slug: str) -> tuple[Tenant, str]:
+    def create_tenant(
+        self, name: str, slug: str, anthropic_api_key: str = ""
+    ) -> tuple[Tenant, str]:
         """Create a new tenant with workspace and return (tenant, raw_api_key).
 
         The raw API key is returned only once at creation time.
+
+        Args:
+            anthropic_api_key: Per-tenant Anthropic API key for CLI billing.
+                Per Anthropic's legal/compliance docs, multi-tenant services
+                must use API key auth (not OAuth/Pro/Max credentials).
         """
         tenant_id = str(uuid.uuid4())
         raw_key = f"ocmt_{secrets.token_urlsafe(32)}"
@@ -68,8 +76,9 @@ class TenantManager:
         now = time.time()
 
         self.db.execute(
-            "INSERT INTO tenants (id, name, slug, api_key_hash, created_at) VALUES (?, ?, ?, ?, ?)",
-            (tenant_id, name, slug, key_hash, now),
+            "INSERT INTO tenants (id, name, slug, api_key_hash, created_at, anthropic_api_key)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (tenant_id, name, slug, key_hash, now, anthropic_api_key),
         )
         self.db.commit()
 
@@ -79,6 +88,7 @@ class TenantManager:
             slug=slug,
             api_key_hash=key_hash,
             created_at=now,
+            anthropic_api_key=anthropic_api_key,
         )
 
         workspace = self.resolve_workspace(tenant_id)

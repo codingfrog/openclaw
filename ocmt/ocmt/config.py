@@ -12,6 +12,10 @@ class CliConfig(BaseModel):
     """Claude Code CLI backend configuration.
 
     Ported from OpenClaw's CliBackendConfig (src/config/types.agent-defaults.ts).
+
+    COMPLIANCE NOTE: Per https://code.claude.com/docs/en/legal-and-compliance,
+    developers building products/services must use API key authentication
+    (not OAuth). Set `api_key` here or per-tenant to use ANTHROPIC_API_KEY.
     """
 
     command: str = "claude"
@@ -34,6 +38,9 @@ class CliConfig(BaseModel):
     timeout_ms: int = 120_000
     no_output_timeout_ms: int = 60_000
     serialize: bool = True
+    # Anthropic API key for CLI subprocess. Required for compliance —
+    # OAuth/Pro/Max credentials must NOT be used to serve third-party users.
+    api_key: str = ""
 
 
 class AgentConfig(BaseModel):

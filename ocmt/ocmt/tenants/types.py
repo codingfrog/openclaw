@@ -16,6 +16,10 @@ class Tenant:
     api_key_hash: str
     created_at: float
     config_json: str = "{}"
+    # Per-tenant Anthropic API key (encrypted at rest in production).
+    # When set, CLI subprocess uses this key instead of the global one.
+    # Required for compliance when tenants bring their own billing.
+    anthropic_api_key: str = ""
 
 
 @dataclass

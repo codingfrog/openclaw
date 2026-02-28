@@ -1,4 +1,11 @@
 # OCMT global configuration
+#
+# COMPLIANCE NOTE (https://code.claude.com/docs/en/legal-and-compliance):
+#   Developers building products/services MUST use API key authentication
+#   (via Claude Console or a supported cloud provider). OAuth tokens from
+#   Free/Pro/Max plans must NOT be used to route requests for third-party
+#   users. Set agents.cli.api_key below, or provide per-tenant API keys
+#   when creating tenants.
 
 database:
   path: "ocmt.sqlite"
@@ -14,6 +21,9 @@ agents:
     timeout_ms: 120000
     no_output_timeout_ms: 60000
     serialize: true
+    # Global Anthropic API key. Per-tenant keys override this.
+    # Get one at https://console.anthropic.com/
+    api_key: ""  # or set ANTHROPIC_API_KEY env var
 
 memory:
   chunk_tokens: 400

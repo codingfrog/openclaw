@@ -2,14 +2,20 @@
 
 Ported from OpenClaw's src/agents/cli-runner.ts and
 src/agents/cli-runner/helpers.ts. Spawns the `claude` CLI
-as a subprocess to execute LLM requests without paying API costs.
+as a subprocess to execute LLM requests.
+
+COMPLIANCE NOTE (https://code.claude.com/docs/en/legal-and-compliance):
+  Developers building products/services MUST use API key authentication
+  (via Claude Console or a supported cloud provider). Using OAuth tokens
+  from Free/Pro/Max plans to serve third-party users is prohibited.
+  Set ANTHROPIC_API_KEY in the config or per-tenant to comply.
 
 Key patterns from OpenClaw:
 - Serialized execution queue per tenant (CLI_RUN_QUEUE)
 - Timeout + no-output watchdog
 - JSON/JSONL/text output parsing
 - Session resume via --resume flag
-- Environment sanitization
+- Per-tenant API key injection
 """
 
 from __future__ import annotations
@@ -38,32 +44,60 @@ def _get_tenant_lock(tenant_id: str) -> asyncio.Lock:
     return _tenant_locks[tenant_id]
 
 
+_compliance_warned = False
+
+
 async def run_cli(
     request: LLMRequest,
     tenant_id: str,
     cli_config: CliConfig | None = None,
+    api_key: str | None = None,
 ) -> LLMResponse:
     """Execute an LLM request via the Claude Code CLI.
 
     Spawns `claude -p --output-format json` as an async subprocess.
     Serialized per tenant to avoid concurrent CLI conflicts.
+
+    Args:
+        api_key: Per-tenant Anthropic API key. Falls back to cli_config.api_key,
+                 then to the ANTHROPIC_API_KEY env var. If none is set, logs a
+                 compliance warning — OAuth/Pro/Max auth is not permitted for
+                 serving third-party users.
     """
     cfg = cli_config or CliConfig()
+    resolved_key = api_key or cfg.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+
+    global _compliance_warned
+    if not resolved_key and not _compliance_warned:
+        logger.warning(
+            "COMPLIANCE WARNING: No ANTHROPIC_API_KEY configured. "
+            "Per https://code.claude.com/docs/en/legal-and-compliance, "
+            "developers building products/services must use API key auth "
+            "(not OAuth). If the local CLI is authenticated via a Pro/Max "
+            "plan, routing multi-tenant requests through it violates "
+            "Anthropic's terms. Set 'agents.cli.api_key' in config.yaml "
+            "or provide a per-tenant API key."
+        )
+        _compliance_warned = True
+
     lock = _get_tenant_lock(tenant_id)
 
     async with lock:
-        return await _execute_cli(request, cfg)
+        return await _execute_cli(request, cfg, resolved_key)
 
 
-async def _execute_cli(request: LLMRequest, cfg: CliConfig) -> LLMResponse:
+async def _execute_cli(
+    request: LLMRequest, cfg: CliConfig, api_key: str = ""
+) -> LLMResponse:
     """Spawn the CLI subprocess and parse output."""
     args = _build_args(request, cfg)
 
-    # Build sanitized environment
+    # Build environment with explicit API key injection.
+    # Per Anthropic's legal/compliance docs, we must use API key auth
+    # (not OAuth) when building products/services for third-party users.
     env = dict(os.environ)
-    # Clear API keys so CLI uses its own auth (from OpenClaw pattern)
-    for key in ("ANTHROPIC_API_KEY",):
-        env.pop(key, None)
+    if api_key:
+        env["ANTHROPIC_API_KEY"] = api_key
 
     cwd = request.workspace_dir or os.getcwd()
 
@@ -250,19 +284,22 @@ async def run_cli_streaming(
     request: LLMRequest,
     tenant_id: str,
     cli_config: CliConfig | None = None,
+    api_key: str | None = None,
 ) -> AsyncIterator[str]:
     """Stream output from Claude CLI line by line.
 
     Uses --stream flag for real-time token delivery.
     """
     cfg = cli_config or CliConfig()
+    resolved_key = api_key or cfg.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
     lock = _get_tenant_lock(tenant_id)
 
     async with lock:
         args = _build_args(request, cfg)
 
         env = dict(os.environ)
-        env.pop("ANTHROPIC_API_KEY", None)
+        if resolved_key:
+            env["ANTHROPIC_API_KEY"] = resolved_key
 
         proc = await asyncio.create_subprocess_exec(
             cfg.command,

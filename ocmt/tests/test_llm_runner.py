@@ -1,10 +1,75 @@
-"""Tests for LLM runner (output parsing and arg building)."""
+"""Tests for LLM runner (output parsing, arg building, and compliance)."""
+
+import logging
 
 import pytest
 
 from ocmt.config import CliConfig
 from ocmt.llm.runner import _build_args, _parse_output
 from ocmt.llm.types import LLMRequest
+
+
+class TestCliConfigApiKey:
+    def test_cli_config_has_api_key_field(self):
+        cfg = CliConfig()
+        assert cfg.api_key == ""
+
+    def test_cli_config_accepts_api_key(self):
+        cfg = CliConfig(api_key="sk-ant-test-key")
+        assert cfg.api_key == "sk-ant-test-key"
+
+
+class TestComplianceWarning:
+    @pytest.mark.asyncio
+    async def test_warns_when_no_api_key(self, caplog, monkeypatch):
+        """Verify compliance warning is logged when no API key is configured."""
+        import ocmt.llm.runner as runner_mod
+
+        # Reset the warning flag so it fires again
+        runner_mod._compliance_warned = False
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+        cfg = CliConfig(api_key="")
+
+        with caplog.at_level(logging.WARNING, logger="ocmt.llm.runner"):
+            # We can't actually run the CLI (no binary), but the warning
+            # fires before subprocess spawn. Catch the subsequent error.
+            try:
+                await runner_mod.run_cli(
+                    request=LLMRequest(prompt="test"),
+                    tenant_id="t1",
+                    cli_config=cfg,
+                    api_key="",
+                )
+            except (FileNotFoundError, OSError, RuntimeError):
+                pass  # CLI binary not available in test env
+
+        assert any("COMPLIANCE WARNING" in r.message for r in caplog.records)
+        # Reset for other tests
+        runner_mod._compliance_warned = False
+
+    @pytest.mark.asyncio
+    async def test_no_warning_when_api_key_set(self, caplog, monkeypatch):
+        """No compliance warning when API key is provided."""
+        import ocmt.llm.runner as runner_mod
+
+        runner_mod._compliance_warned = False
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+        cfg = CliConfig(api_key="sk-ant-test-key-123")
+
+        with caplog.at_level(logging.WARNING, logger="ocmt.llm.runner"):
+            try:
+                await runner_mod.run_cli(
+                    request=LLMRequest(prompt="test"),
+                    tenant_id="t2",
+                    cli_config=cfg,
+                )
+            except (FileNotFoundError, OSError, RuntimeError):
+                pass
+
+        assert not any("COMPLIANCE WARNING" in r.message for r in caplog.records)
+        runner_mod._compliance_warned = False
 
 
 class TestBuildArgs:

@@ -108,7 +108,10 @@ class AgentRunner:
             compaction_count=session.compaction_count,
             last_flush_at=session.memory_flush_compaction_count,
         ):
-            await self._run_memory_flush(tenant_id, workspace, session)
+            await self._run_memory_flush(
+                tenant_id, workspace, session,
+                api_key=tenant.anthropic_api_key or None,
+            )
 
         # 4. Load memory context
         memory_files = load_bootstrap_memory(workspace)
@@ -129,6 +132,9 @@ class AgentRunner:
             if m != resolved_model
         ]
 
+        # Per-tenant API key takes priority, then falls back to global config.
+        tenant_api_key = tenant.anthropic_api_key or None
+
         response = await run_with_fallback(
             models=models,
             runner=lambda m: run_cli(
@@ -143,6 +149,7 @@ class AgentRunner:
                 ),
                 tenant_id=tenant_id,
                 cli_config=self.config.agents.cli,
+                api_key=tenant_api_key,
             ),
         )
 
@@ -199,6 +206,7 @@ class AgentRunner:
         tenant_id: str,
         workspace: TenantWorkspace,
         session: SessionEntry,
+        api_key: str | None = None,
     ) -> None:
         """Run a silent memory flush turn.
 
@@ -220,6 +228,7 @@ class AgentRunner:
                 ),
                 tenant_id=tenant_id,
                 cli_config=self.config.agents.cli,
+                api_key=api_key,
             )
 
             self.sessions.update(

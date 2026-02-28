@@ -71,6 +71,9 @@ def chat(
 def tenant_create(
     name: str = typer.Argument(..., help="Tenant display name"),
     slug: str = typer.Argument(..., help="URL-safe identifier"),
+    anthropic_api_key: str = typer.Option(
+        "", "--anthropic-key", help="Per-tenant Anthropic API key for billing"
+    ),
     config_path: str = typer.Option("config.yaml", "--config", "-c"),
 ):
     """Create a new tenant."""
@@ -81,7 +84,9 @@ def tenant_create(
         typer.echo(f"Tenant already exists: {slug}", err=True)
         raise typer.Exit(1)
 
-    tenant, api_key = tenant_mgr.create_tenant(name, slug)
+    tenant, api_key = tenant_mgr.create_tenant(
+        name, slug, anthropic_api_key=anthropic_api_key
+    )
     typer.echo(f"Created tenant: {tenant.name} ({tenant.slug})")
     typer.echo(f"Tenant ID: {tenant.id}")
     typer.echo(f"API Key: {api_key}")
