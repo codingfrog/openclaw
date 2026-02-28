@@ -252,6 +252,75 @@ describe("resolveGatewayRuntimeConfig", () => {
       expect(result.strictTransportSecurityHeader).toBe("max-age=31536000; includeSubDomains");
     });
 
+    it("auto-enables HSTS when TLS is active and no explicit config", async () => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { mode: "none" },
+            tls: { enabled: true },
+          },
+        },
+        port: 18789,
+      });
+
+      expect(result.strictTransportSecurityHeader).toBe("max-age=31536000; includeSubDomains");
+    });
+
+    it("does not auto-enable HSTS when TLS is not active", async () => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { mode: "none" },
+          },
+        },
+        port: 18789,
+      });
+
+      expect(result.strictTransportSecurityHeader).toBeUndefined();
+    });
+
+    it("allows operator to override HSTS value even when TLS is active", async () => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { mode: "none" },
+            tls: { enabled: true },
+            http: {
+              securityHeaders: {
+                strictTransportSecurity: "max-age=86400",
+              },
+            },
+          },
+        },
+        port: 18789,
+      });
+
+      expect(result.strictTransportSecurityHeader).toBe("max-age=86400");
+    });
+
+    it("allows operator to disable HSTS even when TLS is active", async () => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { mode: "none" },
+            tls: { enabled: true },
+            http: {
+              securityHeaders: {
+                strictTransportSecurity: false,
+              },
+            },
+          },
+        },
+        port: 18789,
+      });
+
+      expect(result.strictTransportSecurityHeader).toBeUndefined();
+    });
+
     it("does not set strict transport security when explicitly disabled", async () => {
       const result = await resolveGatewayRuntimeConfig({
         cfg: {

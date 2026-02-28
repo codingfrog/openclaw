@@ -81,13 +81,18 @@ export async function resolveGatewayRuntimeConfig(params: {
   const openResponsesEnabled = params.openResponsesEnabled ?? openResponsesConfig?.enabled ?? false;
   const strictTransportSecurityConfig =
     params.cfg.gateway?.http?.securityHeaders?.strictTransportSecurity;
+  const tlsEnabled = params.cfg.gateway?.tls?.enabled === true;
   const strictTransportSecurityHeader =
     strictTransportSecurityConfig === false
       ? undefined
       : typeof strictTransportSecurityConfig === "string" &&
           strictTransportSecurityConfig.trim().length > 0
         ? strictTransportSecurityConfig.trim()
-        : undefined;
+        : // Auto-enable HSTS with a safe default when TLS is active and the
+          // operator has not explicitly configured or disabled the header.
+          tlsEnabled
+          ? "max-age=31536000; includeSubDomains"
+          : undefined;
   const controlUiBasePath = normalizeControlUiBasePath(params.cfg.gateway?.controlUi?.basePath);
   const controlUiRootRaw = params.cfg.gateway?.controlUi?.root;
   const controlUiRoot =
