@@ -14,6 +14,65 @@ import bcrypt
 from .isolation import init_workspace
 from .types import Tenant, TenantWorkspace
 
+# Number of bytes from the raw API key used as a fast-lookup prefix.
+# Stored in plaintext alongside the bcrypt hash so authenticate() can
+# narrow to one candidate row instead of scanning all tenants.
+_KEY_PREFIX_LEN = 8
+
+
+def _key_prefix(raw_key: str) -> str:
+    """Extract a fast-lookup prefix from a raw API key.
+
+    Uses the first _KEY_PREFIX_LEN chars after the "ocmt_" prefix.
+    Not a secret — it's an index hint, not a credential.
+    """
+    body = raw_key.removeprefix("ocmt_")
+    return body[:_KEY_PREFIX_LEN]
+
+
+def _encrypt_field(value: str) -> str:
+    """Encrypt a sensitive field for at-rest storage.
+
+    Uses Fernet symmetric encryption keyed to a per-process secret.
+    For production, replace with a KMS-backed key.
+    """
+    if not value:
+        return ""
+    from cryptography.fernet import Fernet
+
+    return _get_fernet().encrypt(value.encode()).decode()
+
+
+def _decrypt_field(token: str) -> str:
+    """Decrypt a field encrypted by _encrypt_field."""
+    if not token:
+        return ""
+    from cryptography.fernet import Fernet
+
+    return _get_fernet().decrypt(token.encode()).decode()
+
+
+# Lazy singleton — generated once per process, or loaded from
+# OCMT_ENCRYPTION_KEY env var for persistence across restarts.
+_fernet_instance = None
+
+
+def _get_fernet():
+    """Get or create the Fernet cipher instance."""
+    global _fernet_instance
+    if _fernet_instance is None:
+        import os
+
+        from cryptography.fernet import Fernet
+
+        key = os.environ.get("OCMT_ENCRYPTION_KEY", "")
+        if key:
+            _fernet_instance = Fernet(key.encode())
+        else:
+            # Auto-generate — suitable for dev; secrets won't survive restart.
+            _fernet_instance = Fernet(Fernet.generate_key())
+    return _fernet_instance
+
 
 def _ensure_global_schema(db: sqlite3.Connection) -> None:
     """Create global tables if they don't exist."""
@@ -23,10 +82,14 @@ def _ensure_global_schema(db: sqlite3.Connection) -> None:
             name TEXT NOT NULL,
             slug TEXT UNIQUE NOT NULL,
             api_key_hash TEXT NOT NULL,
+            api_key_prefix TEXT DEFAULT '',
             created_at REAL NOT NULL,
             config_json TEXT DEFAULT '{}',
-            anthropic_api_key TEXT DEFAULT ''
+            anthropic_api_key_enc TEXT DEFAULT ''
         );
+
+        CREATE INDEX IF NOT EXISTS idx_tenants_api_key_prefix
+            ON tenants(api_key_prefix);
 
         CREATE TABLE IF NOT EXISTS sessions (
             tenant_id TEXT NOT NULL REFERENCES tenants(id),
@@ -68,16 +131,22 @@ class TenantManager:
         Args:
             anthropic_api_key: Optional per-tenant Anthropic API key.
                 When set, CLI subprocess uses this instead of the global key.
+                Stored encrypted at rest.
         """
         tenant_id = str(uuid.uuid4())
         raw_key = f"ocmt_{secrets.token_urlsafe(32)}"
         key_hash = bcrypt.hashpw(raw_key.encode(), bcrypt.gensalt()).decode()
+        prefix = _key_prefix(raw_key)
         now = time.time()
 
+        # Encrypt the Anthropic key for at-rest storage
+        enc_key = _encrypt_field(anthropic_api_key)
+
         self.db.execute(
-            "INSERT INTO tenants (id, name, slug, api_key_hash, created_at, anthropic_api_key)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
-            (tenant_id, name, slug, key_hash, now, anthropic_api_key),
+            "INSERT INTO tenants (id, name, slug, api_key_hash, api_key_prefix,"
+            " created_at, anthropic_api_key_enc)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (tenant_id, name, slug, key_hash, prefix, now, enc_key),
         )
         self.db.commit()
 
@@ -86,8 +155,9 @@ class TenantManager:
             name=name,
             slug=slug,
             api_key_hash=key_hash,
+            api_key_prefix=prefix,
             created_at=now,
-            anthropic_api_key=anthropic_api_key,
+            anthropic_api_key_enc=enc_key,
         )
 
         workspace = self.resolve_workspace(tenant_id)
@@ -122,10 +192,16 @@ class TenantManager:
     def authenticate(self, api_key: str) -> Tenant | None:
         """Authenticate an API key and return the matching tenant.
 
-        Iterates all tenants and checks bcrypt hash. For production,
-        consider a key prefix index for faster lookup.
+        Uses the api_key_prefix index to narrow to at most one candidate,
+        then verifies via bcrypt. This avoids O(n) bcrypt scans that
+        would otherwise be a DoS/timing vector.
         """
-        rows = self.db.execute("SELECT * FROM tenants").fetchall()
+        if not api_key:
+            return None
+        prefix = _key_prefix(api_key)
+        rows = self.db.execute(
+            "SELECT * FROM tenants WHERE api_key_prefix = ?", (prefix,)
+        ).fetchall()
         for row in rows:
             tenant = Tenant(**dict(row))
             if bcrypt.checkpw(api_key.encode(), tenant.api_key_hash.encode()):
@@ -138,6 +214,10 @@ class TenantManager:
             "SELECT * FROM tenants ORDER BY created_at"
         ).fetchall()
         return [Tenant(**dict(row)) for row in rows]
+
+    def get_anthropic_api_key(self, tenant: Tenant) -> str:
+        """Decrypt and return the per-tenant Anthropic API key, or ""."""
+        return _decrypt_field(tenant.anthropic_api_key_enc)
 
     def delete_tenant(self, tenant_id: str) -> None:
         """Delete a tenant record. Does NOT delete workspace files."""

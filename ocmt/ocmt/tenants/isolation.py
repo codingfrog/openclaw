@@ -29,14 +29,29 @@ def init_workspace(workspace: TenantWorkspace) -> None:
 def validate_path_within_workspace(workspace: TenantWorkspace, path: str | Path) -> bool:
     """Ensure a path is within the tenant's workspace root.
 
-    Security boundary: prevents path traversal attacks.
+    Security boundary: prevents path traversal and symlink escape attacks.
     Mirrors OpenClaw's workspace path validation in
     src/memory/manager.ts (readFile method).
+
+    Rejects:
+    - Parent-dir traversal (../../etc/passwd)
+    - Symlinks that point outside the workspace
     """
-    resolved = Path(path).resolve()
+    p = Path(path)
+    resolved = p.resolve()  # follows symlinks
     workspace_root = workspace.root.resolve()
     try:
         resolved.relative_to(workspace_root)
-        return True
     except ValueError:
         return False
+
+    # Also reject if any intermediate component is a symlink pointing outside.
+    # resolve() already handles the final target, but be explicit.
+    if p.is_symlink():
+        link_target = p.resolve()
+        try:
+            link_target.relative_to(workspace_root)
+        except ValueError:
+            return False
+
+    return True

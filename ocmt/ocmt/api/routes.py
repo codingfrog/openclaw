@@ -9,7 +9,10 @@ Provides endpoints for:
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import os
+import secrets
+
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from ..tenants.types import Tenant
@@ -29,6 +32,24 @@ def set_dependencies(agent_runner, tenant_manager, session_store):
     _agent_runner = agent_runner
     _tenant_manager = tenant_manager
     _session_store = session_store
+
+
+async def _require_admin_key(
+    x_admin_key: str = Header(..., alias="X-Admin-Key"),
+) -> None:
+    """Verify the admin key for tenant management endpoints.
+
+    The admin key is set via OCMT_ADMIN_KEY env var. If unset,
+    admin endpoints are disabled (returns 403).
+    """
+    expected = os.environ.get("OCMT_ADMIN_KEY", "")
+    if not expected:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin endpoints disabled — set OCMT_ADMIN_KEY env var",
+        )
+    if not secrets.compare_digest(x_admin_key, expected):
+        raise HTTPException(status_code=403, detail="Invalid admin key")
 
 
 # --- Request/Response Models ---
@@ -199,9 +220,13 @@ async def delete_session(
 # --- Tenant Admin ---
 
 
-@router.post("/tenants", response_model=TenantCreateResponse)
+@router.post(
+    "/tenants",
+    response_model=TenantCreateResponse,
+    dependencies=[Depends(_require_admin_key)],
+)
 async def create_tenant(req: TenantCreateRequest):
-    """Create a new tenant. Returns the API key (shown only once)."""
+    """Create a new tenant. Requires X-Admin-Key header."""
     existing = _tenant_manager.get_tenant_by_slug(req.slug)
     if existing:
         raise HTTPException(status_code=409, detail="Slug already exists")
@@ -217,9 +242,9 @@ async def create_tenant(req: TenantCreateRequest):
     )
 
 
-@router.get("/tenants")
+@router.get("/tenants", dependencies=[Depends(_require_admin_key)])
 async def list_tenants():
-    """List all tenants (admin)."""
+    """List all tenants. Requires X-Admin-Key header."""
     tenants = _tenant_manager.list_tenants()
     return {
         "tenants": [

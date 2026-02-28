@@ -15,10 +15,11 @@ class Tenant:
     slug: str
     api_key_hash: str
     created_at: float
+    api_key_prefix: str = ""
     config_json: str = "{}"
-    # Optional per-tenant Anthropic API key.
-    # When set, CLI subprocess uses this key instead of the global one.
-    anthropic_api_key: str = ""
+    # Encrypted per-tenant Anthropic API key (Fernet at rest).
+    # Decrypted on demand via TenantManager.get_anthropic_api_key().
+    anthropic_api_key_enc: str = ""
 
 
 @dataclass

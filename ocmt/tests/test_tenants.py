@@ -100,3 +100,54 @@ class TestWorkspaceIsolation:
         assert ws1.root != ws2.root
         assert str(ws1.root).endswith("t1")
         assert str(ws2.root).endswith("t2")
+
+    def test_validate_path_rejects_symlink_escape(self, tmp_dir):
+        """Symlink inside workspace pointing outside must be rejected."""
+        workspace = TenantWorkspace(tenant_id="t1", root=tmp_dir / "tenant-1")
+        init_workspace(workspace)
+
+        # Create a symlink inside workspace that points outside
+        outside = tmp_dir / "secret.txt"
+        outside.write_text("secret")
+        link = workspace.memory_dir / "escape.md"
+        link.symlink_to(outside)
+
+        assert validate_path_within_workspace(workspace, link) is False
+
+
+class TestApiKeyPrefixAuth:
+    """Verify prefix-indexed authentication works correctly."""
+
+    def test_authenticate_uses_prefix(self, tenant_manager):
+        tenant, api_key = tenant_manager.create_tenant("Prefix Test", "prefix")
+        assert tenant.api_key_prefix != ""
+        result = tenant_manager.authenticate(api_key)
+        assert result is not None
+        assert result.id == tenant.id
+
+    def test_authenticate_empty_key(self, tenant_manager):
+        tenant_manager.create_tenant("Empty Key", "empty-key")
+        assert tenant_manager.authenticate("") is None
+
+    def test_anthropic_key_encrypted(self, tenant_manager):
+        """Anthropic API key should not be stored in plaintext."""
+        tenant, _ = tenant_manager.create_tenant(
+            "Enc Test", "enc-test", anthropic_api_key="sk-ant-secret123"
+        )
+        # Raw DB should NOT contain the plaintext key
+        row = tenant_manager.db.execute(
+            "SELECT anthropic_api_key_enc FROM tenants WHERE id = ?",
+            (tenant.id,),
+        ).fetchone()
+        raw_value = row["anthropic_api_key_enc"]
+        assert raw_value != "sk-ant-secret123"
+        assert raw_value != ""
+
+        # But decryption should recover it
+        decrypted = tenant_manager.get_anthropic_api_key(tenant)
+        assert decrypted == "sk-ant-secret123"
+
+    def test_anthropic_key_empty(self, tenant_manager):
+        """Empty anthropic key should round-trip as empty."""
+        tenant, _ = tenant_manager.create_tenant("No Key", "no-key")
+        assert tenant_manager.get_anthropic_api_key(tenant) == ""

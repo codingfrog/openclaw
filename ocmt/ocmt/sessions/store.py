@@ -120,8 +120,15 @@ class SessionStore:
     @staticmethod
     def transcript_path(workspace: TenantWorkspace, session_key: str) -> Path:
         """Get the JSONL transcript file path for a session."""
-        # Sanitize session key for filesystem
-        safe_key = session_key.replace(":", "_").replace("/", "_")
+        import re
+
+        # Sanitize: strip path separators, NUL bytes, parent-dir refs,
+        # and non-word characters to prevent path traversal.
+        safe_key = session_key.replace(":", "_").replace("/", "_").replace("\\", "_")
+        safe_key = safe_key.replace("\x00", "").replace("..", "_")
+        safe_key = re.sub(r"[^\w\-]", "_", safe_key)
+        if not safe_key:
+            safe_key = "unknown"
         return workspace.sessions_dir / f"{safe_key}.jsonl"
 
     @staticmethod

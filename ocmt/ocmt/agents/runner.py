@@ -110,7 +110,7 @@ class AgentRunner:
         ):
             await self._run_memory_flush(
                 tenant_id, workspace, session,
-                api_key=tenant.anthropic_api_key or None,
+                api_key=self.tenants.get_anthropic_api_key(tenant) or None,
             )
 
         # 4. Load memory context
@@ -133,7 +133,7 @@ class AgentRunner:
         ]
 
         # Per-tenant API key takes priority, then falls back to global config.
-        tenant_api_key = tenant.anthropic_api_key or None
+        tenant_api_key = self.tenants.get_anthropic_api_key(tenant) or None
 
         response = await run_with_fallback(
             models=models,
