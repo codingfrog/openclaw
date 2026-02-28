@@ -1,3 +1,4 @@
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { BrowserFormField } from "./client-actions-core.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
 import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
@@ -9,6 +10,11 @@ import {
   restoreRoleRefsForTarget,
 } from "./pw-session.js";
 import { normalizeTimeoutMs, requireRef, toAIFriendlyError } from "./pw-tools-core.shared.js";
+
+const log = createSubsystemLogger("browser").child("evaluate");
+
+/** Maximum allowed size (in bytes) for an evaluate function body. */
+const MAX_EVALUATE_BODY_SIZE = 100 * 1024; // 100 KB
 
 export async function highlightViaPlaywright(opts: {
   cdpUrl: string;
@@ -231,6 +237,26 @@ export async function evaluateViaPlaywright(opts: {
   if (!fnText) {
     throw new Error("function is required");
   }
+
+  // Size limit: reject excessively large function bodies to prevent abuse.
+  const fnByteLength = new TextEncoder().encode(fnText).byteLength;
+  if (fnByteLength > MAX_EVALUATE_BODY_SIZE) {
+    const msg = `evaluate function body exceeds size limit (${fnByteLength} bytes > ${MAX_EVALUATE_BODY_SIZE} bytes)`;
+    log.warn(msg, { fnByteLength, limit: MAX_EVALUATE_BODY_SIZE });
+    throw new Error(msg);
+  }
+
+  // Audit log: record every browser-context code evaluation for security visibility.
+  const evaluationMode = opts.ref ? "element" : "page";
+  const truncatedBody = fnText.length > 200 ? fnText.slice(0, 200) + "..." : fnText;
+  log.info("browser evaluate invoked", {
+    mode: evaluationMode,
+    ref: opts.ref ?? null,
+    timeoutMs: opts.timeoutMs ?? null,
+    fnBodyLength: fnText.length,
+    fnBodyPreview: truncatedBody,
+  });
+
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
