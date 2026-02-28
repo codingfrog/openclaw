@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { encodePairingSetupCode } from "../pairing/setup-code.js";
+import { decodePairingSetupCode } from "../pairing/setup-code.js";
 
 const runtime = {
   log: vi.fn(),
@@ -85,15 +85,21 @@ describe("registerQrCli", () => {
 
     await runQr(["--setup-code-only"]);
 
-    const expected = encodePairingSetupCode({
-      url: "ws://gateway.local:18789",
-      token: "tok",
-    });
-    expect(runtime.log).toHaveBeenCalledWith(expected);
+    // Security warning is logged before the setup code.
+    const allOutput = runtime.log.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+    expect(allOutput).toContain("Security:");
+
+    // Last log call is the setup code itself.
+    const setupCodeOutput = String(runtime.log.mock.calls.at(-1)?.[0] ?? "");
+    const decoded = decodePairingSetupCode(setupCodeOutput);
+    expect(decoded).not.toBeNull();
+    expect(decoded!.url).toBe("ws://gateway.local:18789");
+    expect(decoded!.token).toBe("tok");
+    expect(decoded!.createdAt).toBeTypeOf("number");
     expect(qrGenerate).not.toHaveBeenCalled();
   });
 
-  it("renders ASCII QR by default", async () => {
+  it("renders ASCII QR by default with security warning", async () => {
     loadConfig.mockReturnValue({
       gateway: {
         bind: "custom",
@@ -106,6 +112,7 @@ describe("registerQrCli", () => {
 
     expect(qrGenerate).toHaveBeenCalledTimes(1);
     const output = runtime.log.mock.calls.map((call) => String(call[0] ?? "")).join("\n");
+    expect(output).toContain("Security:");
     expect(output).toContain("Pairing QR");
     expect(output).toContain("ASCII-QR");
     expect(output).toContain("Gateway:");
@@ -122,11 +129,11 @@ describe("registerQrCli", () => {
 
     await runQr(["--setup-code-only", "--token", "override-token"]);
 
-    const expected = encodePairingSetupCode({
-      url: "ws://gateway.local:18789",
-      token: "override-token",
-    });
-    expect(runtime.log).toHaveBeenCalledWith(expected);
+    const setupCodeOutput = String(runtime.log.mock.calls.at(-1)?.[0] ?? "");
+    const decoded = decodePairingSetupCode(setupCodeOutput);
+    expect(decoded).not.toBeNull();
+    expect(decoded!.url).toBe("ws://gateway.local:18789");
+    expect(decoded!.token).toBe("override-token");
   });
 
   it("exits with error when gateway config is not pairable", async () => {
@@ -147,11 +154,11 @@ describe("registerQrCli", () => {
     loadConfig.mockReturnValue(createRemoteQrConfig());
     await runQr(["--setup-code-only", "--remote"]);
 
-    const expected = encodePairingSetupCode({
-      url: "wss://remote.example.com:444",
-      token: "remote-tok",
-    });
-    expect(runtime.log).toHaveBeenCalledWith(expected);
+    const setupCodeOutput = String(runtime.log.mock.calls.at(-1)?.[0] ?? "");
+    const decoded = decodePairingSetupCode(setupCodeOutput);
+    expect(decoded).not.toBeNull();
+    expect(decoded!.url).toBe("wss://remote.example.com:444");
+    expect(decoded!.token).toBe("remote-tok");
   });
 
   it.each([

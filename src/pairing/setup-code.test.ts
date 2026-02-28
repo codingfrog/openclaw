@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { encodePairingSetupCode, resolvePairingSetupFromConfig } from "./setup-code.js";
+import {
+  SETUP_CODE_MAX_AGE_MS,
+  decodePairingSetupCode,
+  encodePairingSetupCode,
+  isSetupCodeExpired,
+  resolvePairingSetupFromConfig,
+} from "./setup-code.js";
 
 describe("pairing setup code", () => {
   beforeEach(() => {
@@ -13,13 +19,76 @@ describe("pairing setup code", () => {
     vi.unstubAllEnvs();
   });
 
-  it("encodes payload as base64url JSON", () => {
+  it("encodes payload as base64url JSON with createdAt timestamp", () => {
+    const now = 1700000000000;
     const code = encodePairingSetupCode({
       url: "wss://gateway.example.com:443",
       token: "abc",
+      createdAt: now,
     });
 
-    expect(code).toBe("eyJ1cmwiOiJ3c3M6Ly9nYXRld2F5LmV4YW1wbGUuY29tOjQ0MyIsInRva2VuIjoiYWJjIn0");
+    // Verify roundtrip: decode and check fields.
+    const decoded = decodePairingSetupCode(code);
+    expect(decoded).not.toBeNull();
+    expect(decoded!.url).toBe("wss://gateway.example.com:443");
+    expect(decoded!.token).toBe("abc");
+    expect(decoded!.createdAt).toBe(now);
+
+    // Verify base64url encoding (no +, /, or trailing =).
+    expect(code).not.toMatch(/[+/=]/);
+  });
+
+  it("auto-stamps createdAt when not provided", () => {
+    const before = Date.now();
+    const code = encodePairingSetupCode({
+      url: "wss://example.com",
+      token: "tok",
+    });
+    const after = Date.now();
+
+    const decoded = decodePairingSetupCode(code);
+    expect(decoded).not.toBeNull();
+    expect(decoded!.createdAt).toBeGreaterThanOrEqual(before);
+    expect(decoded!.createdAt).toBeLessThanOrEqual(after);
+  });
+
+  it("decodePairingSetupCode returns null for invalid input", () => {
+    expect(decodePairingSetupCode("")).toBeNull();
+    expect(decodePairingSetupCode("not-base64!!!")).toBeNull();
+    // Valid base64 but not a setup code JSON (missing url).
+    const noUrl = Buffer.from(JSON.stringify({ token: "x" })).toString("base64");
+    expect(decodePairingSetupCode(noUrl)).toBeNull();
+  });
+
+  it("isSetupCodeExpired returns false for fresh codes", () => {
+    const now = Date.now();
+    expect(isSetupCodeExpired({ url: "wss://x", createdAt: now }, SETUP_CODE_MAX_AGE_MS, now)).toBe(
+      false,
+    );
+    // 59 minutes old: still valid.
+    expect(
+      isSetupCodeExpired(
+        { url: "wss://x", createdAt: now - 59 * 60 * 1000 },
+        SETUP_CODE_MAX_AGE_MS,
+        now,
+      ),
+    ).toBe(false);
+  });
+
+  it("isSetupCodeExpired returns true for stale codes", () => {
+    const now = Date.now();
+    // 61 minutes old: expired.
+    expect(
+      isSetupCodeExpired(
+        { url: "wss://x", createdAt: now - 61 * 60 * 1000 },
+        SETUP_CODE_MAX_AGE_MS,
+        now,
+      ),
+    ).toBe(true);
+  });
+
+  it("isSetupCodeExpired treats missing createdAt as expired", () => {
+    expect(isSetupCodeExpired({ url: "wss://x" })).toBe(true);
   });
 
   it("resolves custom bind + token auth", async () => {

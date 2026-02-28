@@ -6,10 +6,22 @@ import { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
 
 const DEFAULT_GATEWAY_PORT = 18789;
 
+/**
+ * Default maximum age for pairing setup codes: 1 hour in milliseconds.
+ * Consuming clients should reject setup codes older than this to limit the
+ * window during which a leaked code can be used.
+ */
+export const SETUP_CODE_MAX_AGE_MS = 60 * 60 * 1000;
+
 export type PairingSetupPayload = {
   url: string;
   token?: string;
   password?: string;
+  /**
+   * Unix epoch timestamp (ms) when this setup code was generated.
+   * Consumers should reject codes where `Date.now() - createdAt > SETUP_CODE_MAX_AGE_MS`.
+   */
+  createdAt?: number;
 };
 
 export type PairingSetupCommandResult = {
@@ -257,10 +269,68 @@ async function resolveGatewayUrl(
   };
 }
 
+/**
+ * Encode a pairing payload as a base64url string suitable for QR codes.
+ *
+ * **OC-SEC-009 – Security notice:**
+ * The resulting setup code contains the long-lived gateway credential (token
+ * or password) in cleartext -- it is only base64-encoded, NOT encrypted.
+ * Anyone who obtains this string can decode it trivially and extract the
+ * credential. Treat setup codes with the same sensitivity as raw passwords:
+ *   - Do not transmit over insecure channels (plain HTTP, unencrypted email).
+ *   - Do not persist to logs or analytics.
+ *   - Display only when the user explicitly requests pairing.
+ *
+ * A `createdAt` timestamp is embedded so consumers can reject stale codes.
+ */
 export function encodePairingSetupCode(payload: PairingSetupPayload): string {
-  const json = JSON.stringify(payload);
+  const stamped: PairingSetupPayload = {
+    ...payload,
+    createdAt: payload.createdAt ?? Date.now(),
+  };
+  const json = JSON.stringify(stamped);
   const base64 = Buffer.from(json, "utf8").toString("base64");
   return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+/**
+ * Decode a base64url-encoded setup code back into a {@link PairingSetupPayload}.
+ * Returns `null` when the input is malformed or not valid JSON.
+ */
+export function decodePairingSetupCode(raw: string): PairingSetupPayload | null {
+  try {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const normalized = trimmed.replace(/-/g, "+").replace(/_/g, "/");
+    const pad = normalized.length % 4;
+    const padded = pad === 0 ? normalized : normalized + "=".repeat(4 - pad);
+    const json = Buffer.from(padded, "base64").toString("utf8");
+    const parsed = JSON.parse(json) as Record<string, unknown>;
+    if (typeof parsed !== "object" || parsed === null || typeof parsed.url !== "string") {
+      return null;
+    }
+    return parsed as unknown as PairingSetupPayload;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Returns `true` when a setup code's `createdAt` timestamp indicates the code
+ * is older than {@link SETUP_CODE_MAX_AGE_MS} (default: 1 hour).
+ * Codes without a `createdAt` field are treated as expired (conservative).
+ */
+export function isSetupCodeExpired(
+  payload: PairingSetupPayload,
+  maxAgeMs: number = SETUP_CODE_MAX_AGE_MS,
+  now: number = Date.now(),
+): boolean {
+  if (typeof payload.createdAt !== "number") {
+    return true;
+  }
+  return now - payload.createdAt > maxAgeMs;
 }
 
 export async function resolvePairingSetupFromConfig(

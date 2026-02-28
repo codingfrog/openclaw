@@ -136,6 +136,15 @@ export function registerQrCli(program: Command) {
 
         const setupCode = encodePairingSetupCode(resolved.payload);
 
+        // OC-SEC-009: warn operators that the setup code contains credentials.
+        defaultRuntime.log(
+          theme.warn(
+            "Security: This setup code contains your gateway credential in cleartext (base64-encoded, not encrypted). " +
+              "Treat it like a password -- do not share over insecure channels. The code expires after 1 hour.",
+          ),
+        );
+        defaultRuntime.log("");
+
         if (opts.setupCodeOnly) {
           defaultRuntime.log(setupCode);
           return;
