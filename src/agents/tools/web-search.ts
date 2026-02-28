@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { logVerbose } from "../../globals.js";
+import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import type { AnyAgentTool } from "./common.js";
@@ -601,11 +602,27 @@ function resolveGeminiModel(gemini?: GeminiConfig): string {
   return fromConfig || DEFAULT_GEMINI_MODEL;
 }
 
-async function withTrustedWebSearchEndpoint<T>(
+/**
+ * Resolve the SSRF policy for web_search network requests.
+ *
+ * By default, web_search uses the restrictive policy that blocks private/internal
+ * networks. Operators running self-hosted search provider endpoints on private
+ * networks can opt in via `tools.web.search.dangerouslyAllowPrivateNetwork: true`.
+ */
+function resolveWebSearchSsrfPolicy(search?: WebSearchConfig): SsrFPolicy | undefined {
+  const allow =
+    search &&
+    "dangerouslyAllowPrivateNetwork" in search &&
+    search.dangerouslyAllowPrivateNetwork === true;
+  return allow ? WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY : undefined;
+}
+
+async function withWebSearchEndpoint<T>(
   params: {
     url: string;
     timeoutSeconds: number;
     init: RequestInit;
+    ssrfPolicy?: SsrFPolicy;
   },
   run: (response: Response) => Promise<T>,
 ): Promise<T> {
@@ -614,7 +631,7 @@ async function withTrustedWebSearchEndpoint<T>(
       url: params.url,
       init: params.init,
       timeoutSeconds: params.timeoutSeconds,
-      policy: WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY,
+      policy: params.ssrfPolicy,
     },
     async ({ response }) => run(response),
   );
@@ -625,13 +642,15 @@ async function runGeminiSearch(params: {
   apiKey: string;
   model: string;
   timeoutSeconds: number;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ content: string; citations: Array<{ url: string; title?: string }> }> {
   const endpoint = `${GEMINI_API_BASE}/models/${params.model}:generateContent`;
 
-  return withTrustedWebSearchEndpoint(
+  return withWebSearchEndpoint(
     {
       url: endpoint,
       timeoutSeconds: params.timeoutSeconds,
+      ssrfPolicy: params.ssrfPolicy,
       init: {
         method: "POST",
         headers: {
@@ -696,7 +715,7 @@ async function runGeminiSearch(params: {
         const batch = rawCitations.slice(i, i + MAX_CONCURRENT_REDIRECTS);
         const resolved = await Promise.all(
           batch.map(async (citation) => {
-            const resolvedUrl = await resolveRedirectUrl(citation.url);
+            const resolvedUrl = await resolveRedirectUrl(citation.url, params.ssrfPolicy);
             return { ...citation, url: resolvedUrl };
           }),
         );
@@ -714,14 +733,14 @@ const REDIRECT_TIMEOUT_MS = 5000;
  * Resolve a redirect URL to its final destination using a HEAD request.
  * Returns the original URL if resolution fails or times out.
  */
-async function resolveRedirectUrl(url: string): Promise<string> {
+async function resolveRedirectUrl(url: string, ssrfPolicy?: SsrFPolicy): Promise<string> {
   try {
     return await withWebToolsNetworkGuard(
       {
         url,
         init: { method: "HEAD" },
         timeoutMs: REDIRECT_TIMEOUT_MS,
-        policy: WEB_TOOLS_TRUSTED_NETWORK_SSRF_POLICY,
+        policy: ssrfPolicy,
       },
       async ({ finalUrl }) => finalUrl || url,
     );
@@ -878,6 +897,7 @@ async function runPerplexitySearch(params: {
   model: string;
   timeoutSeconds: number;
   freshness?: string;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ content: string; citations: string[] }> {
   const baseUrl = params.baseUrl.trim().replace(/\/$/, "");
   const endpoint = `${baseUrl}/chat/completions`;
@@ -898,10 +918,11 @@ async function runPerplexitySearch(params: {
     body.search_recency_filter = recencyFilter;
   }
 
-  return withTrustedWebSearchEndpoint(
+  return withWebSearchEndpoint(
     {
       url: endpoint,
       timeoutSeconds: params.timeoutSeconds,
+      ssrfPolicy: params.ssrfPolicy,
       init: {
         method: "POST",
         headers: {
@@ -933,6 +954,7 @@ async function runGrokSearch(params: {
   model: string;
   timeoutSeconds: number;
   inlineCitations: boolean;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{
   content: string;
   citations: string[];
@@ -954,10 +976,11 @@ async function runGrokSearch(params: {
   // citations are returned automatically when available — we just parse
   // them from the response without requesting them explicitly (#12910).
 
-  return withTrustedWebSearchEndpoint(
+  return withWebSearchEndpoint(
     {
       url: XAI_API_ENDPOINT,
       timeoutSeconds: params.timeoutSeconds,
+      ssrfPolicy: params.ssrfPolicy,
       init: {
         method: "POST",
         headers: {
@@ -1040,6 +1063,7 @@ async function runKimiSearch(params: {
   baseUrl: string;
   model: string;
   timeoutSeconds: number;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<{ content: string; citations: string[] }> {
   const baseUrl = params.baseUrl.trim().replace(/\/$/, "");
   const endpoint = `${baseUrl}/chat/completions`;
@@ -1053,10 +1077,11 @@ async function runKimiSearch(params: {
   const MAX_ROUNDS = 3;
 
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
-    const nextResult = await withTrustedWebSearchEndpoint(
+    const nextResult = await withWebSearchEndpoint(
       {
         url: endpoint,
         timeoutSeconds: params.timeoutSeconds,
+        ssrfPolicy: params.ssrfPolicy,
         init: {
           method: "POST",
           headers: {
@@ -1153,6 +1178,7 @@ async function runWebSearch(params: {
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
+  ssrfPolicy?: SsrFPolicy;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     params.provider === "brave"
@@ -1180,6 +1206,7 @@ async function runWebSearch(params: {
       model: params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL,
       timeoutSeconds: params.timeoutSeconds,
       freshness: params.freshness,
+      ssrfPolicy: params.ssrfPolicy,
     });
 
     const payload = {
@@ -1207,6 +1234,7 @@ async function runWebSearch(params: {
       model: params.grokModel ?? DEFAULT_GROK_MODEL,
       timeoutSeconds: params.timeoutSeconds,
       inlineCitations: params.grokInlineCitations ?? false,
+      ssrfPolicy: params.ssrfPolicy,
     });
 
     const payload = {
@@ -1235,6 +1263,7 @@ async function runWebSearch(params: {
       baseUrl: params.kimiBaseUrl ?? DEFAULT_KIMI_BASE_URL,
       model: params.kimiModel ?? DEFAULT_KIMI_MODEL,
       timeoutSeconds: params.timeoutSeconds,
+      ssrfPolicy: params.ssrfPolicy,
     });
 
     const payload = {
@@ -1261,6 +1290,7 @@ async function runWebSearch(params: {
       apiKey: params.apiKey,
       model: params.geminiModel ?? DEFAULT_GEMINI_MODEL,
       timeoutSeconds: params.timeoutSeconds,
+      ssrfPolicy: params.ssrfPolicy,
     });
 
     const payload = {
@@ -1301,10 +1331,11 @@ async function runWebSearch(params: {
     url.searchParams.set("freshness", params.freshness);
   }
 
-  const mapped = await withTrustedWebSearchEndpoint(
+  const mapped = await withWebSearchEndpoint(
     {
       url: url.toString(),
       timeoutSeconds: params.timeoutSeconds,
+      ssrfPolicy: params.ssrfPolicy,
       init: {
         method: "GET",
         headers: {
@@ -1365,6 +1396,7 @@ export function createWebSearchTool(options?: {
   }
 
   const provider = resolveSearchProvider(search);
+  const ssrfPolicy = resolveWebSearchSsrfPolicy(search);
   const perplexityConfig = resolvePerplexityConfig(search);
   const grokConfig = resolveGrokConfig(search);
   const geminiConfig = resolveGeminiConfig(search);
@@ -1470,6 +1502,7 @@ export function createWebSearchTool(options?: {
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
+        ssrfPolicy,
       });
       return jsonResult(result);
     },

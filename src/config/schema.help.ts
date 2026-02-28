@@ -600,6 +600,8 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.search.maxResults": "Default number of results to return (1-10).",
   "tools.web.search.timeoutSeconds": "Timeout in seconds for web_search requests.",
   "tools.web.search.cacheTtlMinutes": "Cache TTL in minutes for web_search results.",
+  "tools.web.search.dangerouslyAllowPrivateNetwork":
+    "Allow web_search to reach private/internal network addresses (e.g. self-hosted search endpoints). Disabled by default for SSRF protection.",
   "tools.web.search.gemini.apiKey":
     "Gemini API key for Google Search grounding (fallback: GEMINI_API_KEY env var).",
   "tools.web.search.gemini.model": 'Gemini model override (default: "gemini-2.5-flash").',

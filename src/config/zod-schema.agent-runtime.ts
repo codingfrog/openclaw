@@ -301,6 +301,7 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
   })
   .strict()
   .optional();

@@ -17,7 +17,7 @@ describe("web_search redirect resolution hardening", () => {
     fetchWithSsrFGuardMock.mockReset();
   });
 
-  it("resolves redirects via SSRF-guarded HEAD requests", async () => {
+  it("resolves redirects via SSRF-guarded HEAD requests with restrictive policy by default", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(null, { status: 200 }),
@@ -26,6 +26,29 @@ describe("web_search redirect resolution hardening", () => {
     });
 
     const resolved = await resolveRedirectUrl("https://example.com/start");
+    expect(resolved).toBe("https://example.com/final");
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://example.com/start",
+        timeoutMs: 5000,
+        init: { method: "HEAD" },
+        policy: undefined,
+        proxy: "env",
+      }),
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes explicit SSRF policy when provided", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(null, { status: 200 }),
+      finalUrl: "https://example.com/final",
+      release,
+    });
+
+    const policy = { dangerouslyAllowPrivateNetwork: true };
+    const resolved = await resolveRedirectUrl("https://example.com/start", policy);
     expect(resolved).toBe("https://example.com/final");
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
       expect.objectContaining({
