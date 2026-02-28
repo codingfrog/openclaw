@@ -66,9 +66,8 @@ class TenantManager:
         The raw API key is returned only once at creation time.
 
         Args:
-            anthropic_api_key: Per-tenant Anthropic API key for CLI billing.
-                Per Anthropic's legal/compliance docs, multi-tenant services
-                must use API key auth (not OAuth/Pro/Max credentials).
+            anthropic_api_key: Optional per-tenant Anthropic API key.
+                When set, CLI subprocess uses this instead of the global key.
         """
         tenant_id = str(uuid.uuid4())
         raw_key = f"ocmt_{secrets.token_urlsafe(32)}"

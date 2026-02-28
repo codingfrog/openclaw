@@ -62,8 +62,7 @@ class MemoryWriteRequest(BaseModel):
 class TenantCreateRequest(BaseModel):
     name: str
     slug: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
-    # Per-tenant Anthropic API key for CLI billing (optional).
-    # If not set, the global agents.cli.api_key / ANTHROPIC_API_KEY is used.
+    # Optional per-tenant Anthropic API key override.
     anthropic_api_key: str = ""
 
 

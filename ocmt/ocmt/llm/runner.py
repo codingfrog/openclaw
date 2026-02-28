@@ -4,18 +4,12 @@ Ported from OpenClaw's src/agents/cli-runner.ts and
 src/agents/cli-runner/helpers.ts. Spawns the `claude` CLI
 as a subprocess to execute LLM requests.
 
-COMPLIANCE NOTE (https://code.claude.com/docs/en/legal-and-compliance):
-  Developers building products/services MUST use API key authentication
-  (via Claude Console or a supported cloud provider). Using OAuth tokens
-  from Free/Pro/Max plans to serve third-party users is prohibited.
-  Set ANTHROPIC_API_KEY in the config or per-tenant to comply.
-
 Key patterns from OpenClaw:
 - Serialized execution queue per tenant (CLI_RUN_QUEUE)
 - Timeout + no-output watchdog
 - JSON/JSONL/text output parsing
 - Session resume via --resume flag
-- Per-tenant API key injection
+- Optional per-tenant API key override
 """
 
 from __future__ import annotations
@@ -44,9 +38,6 @@ def _get_tenant_lock(tenant_id: str) -> asyncio.Lock:
     return _tenant_locks[tenant_id]
 
 
-_compliance_warned = False
-
-
 async def run_cli(
     request: LLMRequest,
     tenant_id: str,
@@ -59,26 +50,12 @@ async def run_cli(
     Serialized per tenant to avoid concurrent CLI conflicts.
 
     Args:
-        api_key: Per-tenant Anthropic API key. Falls back to cli_config.api_key,
-                 then to the ANTHROPIC_API_KEY env var. If none is set, logs a
-                 compliance warning — OAuth/Pro/Max auth is not permitted for
-                 serving third-party users.
+        api_key: Optional Anthropic API key override. Falls back to
+                 cli_config.api_key, then to the ANTHROPIC_API_KEY env var.
+                 If none is set, the CLI uses its own auth (OAuth or env key).
     """
     cfg = cli_config or CliConfig()
     resolved_key = api_key or cfg.api_key or os.environ.get("ANTHROPIC_API_KEY", "")
-
-    global _compliance_warned
-    if not resolved_key and not _compliance_warned:
-        logger.warning(
-            "COMPLIANCE WARNING: No ANTHROPIC_API_KEY configured. "
-            "Per https://code.claude.com/docs/en/legal-and-compliance, "
-            "developers building products/services must use API key auth "
-            "(not OAuth). If the local CLI is authenticated via a Pro/Max "
-            "plan, routing multi-tenant requests through it violates "
-            "Anthropic's terms. Set 'agents.cli.api_key' in config.yaml "
-            "or provide a per-tenant API key."
-        )
-        _compliance_warned = True
 
     lock = _get_tenant_lock(tenant_id)
 
@@ -92,9 +69,8 @@ async def _execute_cli(
     """Spawn the CLI subprocess and parse output."""
     args = _build_args(request, cfg)
 
-    # Build environment with explicit API key injection.
-    # Per Anthropic's legal/compliance docs, we must use API key auth
-    # (not OAuth) when building products/services for third-party users.
+    # Inject API key into subprocess env if provided, otherwise
+    # the CLI uses its own auth (OAuth session or env-level key).
     env = dict(os.environ)
     if api_key:
         env["ANTHROPIC_API_KEY"] = api_key
