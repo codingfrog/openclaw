@@ -2,10 +2,11 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveOAuthDir } from "../config/paths.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createPairingRateLimiter, setPairingRateLimiter } from "./pairing-rate-limit.js";
 import {
   addChannelAllowFromStoreEntry,
   approveChannelPairingCode,
@@ -393,6 +394,106 @@ describe("pairing store", () => {
 
       const scoped = await readChannelAllowFromStore("telegram", process.env, DEFAULT_ACCOUNT_ID);
       expect(scoped).toEqual(["1002", "1001"]);
+    });
+  });
+
+  describe("pairing code approval rate limiting", () => {
+    beforeEach(() => {
+      // Install a strict rate limiter: 3 attempts per 10 min window.
+      setPairingRateLimiter(
+        createPairingRateLimiter({
+          maxAttempts: 3,
+          windowMs: 600_000,
+          lockoutMs: 600_000,
+          pruneIntervalMs: 0,
+        }),
+      );
+    });
+
+    afterEach(() => {
+      // Reset to default limiter after each test.
+      setPairingRateLimiter(null);
+    });
+
+    it("blocks approval attempts after too many wrong codes", async () => {
+      await withTempStateDir(async () => {
+        const created = await upsertChannelPairingRequest({
+          channel: "telegram",
+          id: "u1",
+          accountId: DEFAULT_ACCOUNT_ID,
+        });
+        expect(created.created).toBe(true);
+
+        // Submit 3 wrong codes to exhaust the rate limit.
+        for (let i = 0; i < 3; i++) {
+          const result = await approveChannelPairingCode({
+            channel: "telegram",
+            code: "WRONGCOD",
+          });
+          expect(result).toBeNull();
+        }
+
+        // Even with the correct code, should be rate-limited now.
+        const blocked = await approveChannelPairingCode({
+          channel: "telegram",
+          code: created.code,
+        });
+        expect(blocked).toBeNull();
+
+        // The pairing request should still be pending (not consumed).
+        const pending = await listChannelPairingRequests("telegram");
+        expect(pending).toHaveLength(1);
+        expect(pending[0]?.code).toBe(created.code);
+      });
+    });
+
+    it("resets rate limit on successful approval", async () => {
+      await withTempStateDir(async () => {
+        const created = await upsertChannelPairingRequest({
+          channel: "telegram",
+          id: "u1",
+          accountId: DEFAULT_ACCOUNT_ID,
+        });
+        expect(created.created).toBe(true);
+
+        // Use up 2 of 3 attempts with wrong codes.
+        for (let i = 0; i < 2; i++) {
+          await approveChannelPairingCode({
+            channel: "telegram",
+            code: "WRONGCOD",
+          });
+        }
+
+        // Approve with the correct code (should succeed, 1 attempt left).
+        const approved = await approveChannelPairingCode({
+          channel: "telegram",
+          code: created.code,
+        });
+        expect(approved?.id).toBe("u1");
+
+        // After success, the counter should be reset; create a new request
+        // and submit wrong codes again -- should have full budget.
+        const created2 = await upsertChannelPairingRequest({
+          channel: "telegram",
+          id: "u2",
+          accountId: DEFAULT_ACCOUNT_ID,
+        });
+        expect(created2.created).toBe(true);
+
+        for (let i = 0; i < 2; i++) {
+          const result = await approveChannelPairingCode({
+            channel: "telegram",
+            code: "WRONGCOD",
+          });
+          expect(result).toBeNull();
+        }
+        // Still have 1 attempt left (not blocked from previous failures).
+        const approved2 = await approveChannelPairingCode({
+          channel: "telegram",
+          code: created2.code,
+        });
+        expect(approved2?.id).toBe("u2");
+      });
     });
   });
 });

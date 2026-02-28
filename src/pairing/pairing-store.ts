@@ -9,6 +9,7 @@ import { withFileLock as withPathLock } from "../infra/file-lock.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "../plugin-sdk/json-store.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import { getPairingRateLimiter } from "./pairing-rate-limit.js";
 
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -659,6 +660,15 @@ export async function approveChannelPairingCode(params: {
     return null;
   }
 
+  // Rate-limit pairing code verification attempts per channel+account to
+  // prevent brute-force guessing of the 8-character pairing code.
+  const rateLimitKey = params.accountId?.trim() || "__default__";
+  const limiter = getPairingRateLimiter();
+  const rateLimitCheck = limiter.check(String(params.channel), rateLimitKey);
+  if (!rateLimitCheck.allowed) {
+    return null;
+  }
+
   const filePath = resolvePairingPath(params.channel, env);
   return await withFileLock(
     filePath,
@@ -673,6 +683,8 @@ export async function approveChannelPairingCode(params: {
         return requestMatchesAccountId(r, normalizedAccountId);
       });
       if (idx < 0) {
+        // Wrong code: record the failed attempt for rate limiting.
+        limiter.recordFailure(String(params.channel), rateLimitKey);
         if (removed) {
           await writeJsonFile(filePath, {
             version: 1,
@@ -697,6 +709,8 @@ export async function approveChannelPairingCode(params: {
         accountId: params.accountId?.trim() || entryAccountId,
         env,
       });
+      // Successful approval: clear any accumulated failures for this key.
+      limiter.reset(String(params.channel), rateLimitKey);
       return { id: entry.id, entry };
     },
   );
